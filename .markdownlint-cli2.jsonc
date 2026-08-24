@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/main/schema/markdownlint-cli2-schema.json",
+  "config": {
+    // 中文/混合行（CJK）常超 80 字符，折行别扭；放开行宽。
+    "MD013": false,
+    // 笔记里用 `|` 画的 ASCII 对照表，风格与默认不同；视为刻意排版。
+    "MD060": false
+  }
+}
