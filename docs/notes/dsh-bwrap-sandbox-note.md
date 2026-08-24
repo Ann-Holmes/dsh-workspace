@@ -2,6 +2,8 @@
 
 > 本文是我在排查 dsh-file 插件 404 过程中，对 DeepSeek Harness（DSH）文件沙箱（bwrap）的完整认识整理。
 > 所有技术结论均直接来自本仓库源码与实测验证。
+>
+> **修订记录**：2026-08-24 修订——更正 `danger-full-access` 边界（它不是"任意权限/root"，而是"宿主机上以当前用户身份跑"，附实测 6→1562 进程证据）；把审批/权限部分展开为 6.1/6.2、8.1/8.2/8.3，并澄清"danger-full-access"的**两个含义**（整会话预设 vs 单条命令升级）。
 
 ---
 
@@ -74,9 +76,19 @@ DSH 沙箱的模式 `SandboxMode` 只治理**文件效应**，不治理网络与
 |---|---|---|
 | `read-only` | 拒绝写入（仅 `/dev/null` 等必需 sink） | 只读 |
 | `workspace-write` | 允许写工作区 + `/tmp` | 默认模式，本会话用的 |
-| `danger-full-access` | 绕过沙箱，直接跑原始 argv | 需要时按需升级 |
+| `danger-full-access` | **不套 bwrap**，直接以当前 OS 用户身份在宿主机跑原始 argv | 见第 6 节的"两层含义" |
 
-`danger-full-access` 是唯一不能发给沙箱提供者的模式——它**不调用** `ctx.sandbox`，直接用原始 argv 启动。
+`danger-full-access` 是唯一不能发给沙箱提供者的模式——它**不调用** `ctx.sandbox`，直接用原始 argv 启动。这里有一个**必须先澄清的边界**（本笔记最初写简单了，下面是更正后的准确版本）：
+
+> **`danger-full-access` 不是"任意权限/root"，而是"宿主机上、以当前 OS 用户（本机为 `hzl`）的身份直接跑"。**
+
+它去掉了 bwrap 这一层，所以：
+
+- ✅ **完整进程可见性**：不再受 `--unshare-pid` 限制，能看到并管理宿主的真实进程表（含能杀掉 dsh 服务器进程）。
+- ✅ **读写任何该用户有权限的东西**：`~/.dsh`、profile 等都能写。
+- ❌ **不能做 root 才能做的事**：改系统级文件、杀 root 进程等仍被 OS 权限挡住。
+
+**实测证据**（本次会话）：同一台机器上，常规 `workspace-write` 模式 `ps -ef` 只返回沙箱进程树的 **6** 个进程；升级到 `danger-full-access` 后返回宿主全量 **1562** 个进程，其中就包含了用户那个 tsx 版 dsh 服务器（`node --import tsx/esm apps/cli/src/bin.ts web ... --port 5209`）。
 
 Linux 上 `sandbox-local` 会**优先选 bwrap**（> Landlock），因为它的挂载配置最接近完整边界，并被标记为 `full` enforcement：
 
@@ -109,14 +121,14 @@ DSH 故意保留整棵宿主 `/` 可读，因为 agent 必须读仓库、读 `no
 from `packages/bundle/base/cordis.patch.yml`：
 
 ```yaml
-# 第 1 层：沙箱（能写哪）
+# 第 1 层：沙箱（能写哪）——内核层能力护栏
 - id: sandbox-policy
   name: '@deepseek-ai/dsh-sandbox-policy'
   config:
     mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
     workspaceRoot: !!js process.cwd()
 
-# 第 2 层：审批（要不要先问）
+# 第 2 层：审批（要不要先问）——决策门
 - id: approval
   name: '@deepseek-ai/dsh-user-approval'
   config:
@@ -140,9 +152,29 @@ from `packages/bundle/base/cordis.patch.yml`：
 
 **本会话**：未设 `DSH_PERMISSION_MODE` → 默认 `workspace-write` → 沙箱 `workspace-write` + 审批 `ask`。
 
+### 6.1 关键词 `danger-full-access` 有**两个不同含义**（必须区分）
+
+同一个词，在不同语境指两件不同的事：
+
+| 含义 | 作用范围 | 行为 |
+|---|---|---|
+| **A. 会话预设** `permission: danger-full-access` | 整场会话 | 每条命令都不套 bwrap + 审批 `never`（**全程不弹确认**） |
+| **B. 单条命令升级** `sandbox_permissions: danger-full-access` | 仅当前这一条命令 | 这条命令不套 bwrap，但**审批仍是 `ask`** → 仍会弹一次确认（一次性的） |
+
+两者**不在一个层面**：A 是"整场会话的模式设定"，B 是"单次工具调用越过当前模式"。
+
+### 6.2 审批层的"放行"逻辑
+
+审批层的值只有两个语义（由 `dsh-user-approval` 的 `policy` 决定）：
+
+- `ask`：遇到需要"更宽权限"的操作时，弹出确认，由**人**决定是否放行。
+- `never`：不询问，直接放行（通常只在 `danger-full-access` 预设下用到）。
+
+关键点：**审批不是按"大小"自动判断，而是把决定权交给人类**。沙箱拦下的是一个事实（EROFS / 不完整可见），审批层负责把"要不要越界"这个问题抛给人。审批 `ask` 不代表"会拒绝"，而是"要问"；`never` 也不代表"更安全"，而是"不问"——它常常和 `danger-full-access` 绑定，意味着"已经全放开，没必要再问"。
+
 ---
 
-## 7. 实际体验：我遇到的三个限制
+## 7. 实际体验（本次会话实测）
 
 正因为这层设计，本次排查中完全一致：
 
@@ -152,21 +184,41 @@ from `packages/bundle/base/cordis.patch.yml`：
 | **写**工作区外（`~/.dsh`） | ❌ EROFS | 只有工作区 + `/tmp` 可写 |
 | **看/管理**外面进程（杀 5209） | ❌ | `--unshare-pid` → 看不到宿主进程 |
 | **网络**（curl 5209、起测试服务器） | ✅ | 无 `--unshare-net`，网络共享 |
+| 升级到 `danger-full-access` 后看进程 | ✅ | 不套 bwrap → 直接见宿主进程表（6 → 1562） |
 
-这就解释了为什么"重启 dsh 服务器"这类操作会卡住：**杀不了宿主进程、写不了工作区外的 profile**。
+注意最后一行：**常规模式看不到宿主进程，但升级到 `danger-full-access` 就能看到**——这正是第 4 节那个"宿主机用户身份"边界的实证。这解释了为什么"重启 dsh 服务器"这类操作会卡住：常规模式**杀不了宿主进程、写不了工作区外的 profile**，只有升级后才具备这些能力。
 
 ---
 
-## 8. 按需绕过：`danger-full-access` + 审批
+## 8. 按需绕过：单条命令升级到 `danger-full-access` + 审批
 
-当确实需要写工作区外时，会触发一次"升级"：
+当确实需要越过当前模式（写工作区外 / 看宿主进程）时，会触发一次"**升级（escalation）**"。这是"单条命令升级"（第 6.1 节的含义 B），走的是一条受限的、需要人确认的路径。
 
-1. 命令执行碰到沙箱拒绝（如对 `~/.dsh` 写入的 EROFS）。
-2. 以更宽的 `sandbox_permissions`（`danger-full-access`）重试同一条命令，并附一句 `justification` 理由。
-3. **审批层**（本会话 `approval: ask`）弹出确认，由用户批准后放行。
-4. 批准后该命令以内核允许的完整访问执行（如刚才卸载 dsh-file 时写入 `~/.dsh/profiles/web`）。
+### 8.1 流程（本会话 `workspace-write` + `ask`）
 
-> 注意：只有"真实拒绝"才能升级；且一次升级只对那一条命令生效。若当前审批策略已是 `never`（如 `danger-full-access` 预设），则不会询问。
+1. **命令被沙箱拒绝**。这通常表现为文件写被拒（对 `~/.dsh` 写入报 `EROFS`），或能力被 `--unshare-pid` 截断（看不到宿主进程）。
+2. **只读命令被截断的情况**：`ps -ef` 在常规模式不报错，只返回沙箱进程树（6 个）——它不是"文件效应拒绝"，但同样受沙箱限制。
+3. **以更宽的 `sandbox_permissions` 重试同一条命令**，并附一句 `justification`（为什么需要更宽）。
+4. **审批层（`approval: ask`）弹出确认**——即使我们是在"单条命令升级"，审批仍是 `ask`（不是 `never`），所以这一步**一定会问人**。
+5. **用户批准后放行**：该命令这一次不再套 bwrap，以当前 OS 用户身份直接在宿主机执行（如写入 `~/.dsh/profiles/web` 已完成 dsh-file 卸载、或能看到 1562 个宿主进程）。
+
+### 8.2 关键守则（这些限制让"升级"不会变成随便越权）
+
+- **一次只对一条命令生效**：`sandbox_permissions` 是工具调用级别的参数，只放宽当前这一次调用，不改变整个会话的模式。
+- **用"刚好够用的更宽档位"**：从 `workspace-write` 出发，下一个更宽的就是 `danger-full-access`（`read-only` 是更窄，不是方向）。DSH 没有更细粒度的档位，所以这一步是"要么工作区，要么全放开"。
+- **升级要有真实理由**（`justification`）：不是随手加宽，而是明确说明这次调用为什么需要。
+- **拒绝是最终的不例外**：如果会话设定了**审批提示被禁用**，那么被拒就是最终结果——**此时绝不能设置 `sandbox_permissions`**，也不能用别的方式绕过它。
+- **不臆测升级**：升级通常"锚定在一次真实拒绝上"（即这条命令刚碰到的拒绝）；只有在"本会话已经拒绝过同样的访问"时才允许预先升级。
+
+### 8.3 与"整会话 `danger-full-access`"的区别
+
+| | 单条命令升级（本节） | 整会话预设 `danger-full-access` |
+|---|---|---|
+| 作用范围 | 仅一条命令 | 整场会话 |
+| 沙箱 | 这条命令不套 bwrap | 每条命令都不套 bwrap |
+| 审批 | **仍 `ask`**（本会话下会问） | **`never`**（不问） |
+
+所以：**升级 ≠ 悄无声息地放开**。在当前 `workspace-write`/`ask` 会话下，哪怕我升级到 `danger-full-access`，这条命令的批准权仍在你这儿。
 
 ---
 
@@ -191,6 +243,8 @@ from `packages/bundle/base/cordis.patch.yml`：
 | `packages/sandbox/sandbox-local/src/profiles.ts` | **`bwrapProfileArgs()` 参数生成**（本文第 3 节的源码） |
 | `packages/sandbox/sandbox-policy` | 策略解析（`ctx.sandboxPolicy`，mode + workspaceRoot 优先级） |
 | `packages/shell/bash-sandbox` | bash 工具消费沙箱（`timeoutMs: 60000`） |
+| `packages/interaction/user-approval` | **审批层** `dsh-user-approval`（`ask`/`never`） |
+| `packages/interaction/permission-presets` | **预设** `dsh-permission-presets`（三档组合） |
 | `packages/bundle/base/cordis.patch.yml` | `sandbox` / `sandbox-policy` / `bash-sandbox` / `approval` / `permission`（本文第 6 节的配置） |
 | `docs/subsystems/sandbox.md` | 子系统文档（"Network and process visibility are outside this vocabulary"） |
 
@@ -198,4 +252,4 @@ from `packages/bundle/base/cordis.patch.yml`：
 
 ## 11. 一句话备忘
 
-> **bwrap 是"写聚焦、读保留、网络共享"的轻量进程沙箱；沙箱管写哪、审批管问不问，两层分离，`danger-full-access` 是唯一需要按需升级的出口。**
+> **bwrap 是"写聚焦、读保留、网络共享"的轻量进程沙箱；沙箱管写哪、审批管问不问，两层分离。`danger-full-access` 有两层含义：整会话预设（绕过沙箱 + 审批 `never`），或单条命令升级（这条命令绕过沙箱，但审批仍 `ask`）。升级不是"任意权限"，而是"宿主机上以当前用户身份跑"——能看到/管理用户自己的进程、能写用户有权限的地方，但**不是 root**。**
