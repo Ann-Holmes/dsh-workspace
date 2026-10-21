@@ -63,14 +63,7 @@ Follow the commit message format: `<emoji> <type>(<scope>): <description>\n\n<de
 
 Types: ✨ feat, 🐞 fix, 🦄 refactor, 🌈 style, 🐎 ci, 📃 docs, 🐳 chore, 🎉 init
 
-## 环境注意（排查 dsh 时）
-
-- dsh 从源码 checkout 运行：
-  - 用 `node apps/cli/lib/bin.js web ...`（构建版 CLI）——推荐，无 tsx 路径分裂。
-  - 用 `pnpm dsh`（tsx 源码）——`@deepseek-ai/*` 内部包会因 tsconfig paths 解析到 src、外部插件（`~/.dsh/profiles`）解析到 lib，造成 typert-protocol 双实例、插件 RPC 404。
-- 沙箱：`workspace-write` + 审批 `ask`；写工作区外需按需升 `danger-full-access`。
-
-### 网络与代理（推 GitHub 时）
+## 网络与代理（推 GitHub 时）
 
 - **远程仓库已改为 SSH**：`origin` = `git@github.com:Ann-Holmes/dsh-workspace.git`，`main` 跟踪 `origin/main`。日常 `git push` / `git fetch` 走 SSH 直连（`~/.ssh/id_rsa`，已验证可登录 `Ann-Holmes`），**既不需要代理也不需要 token**；不要再把 remote 改回 HTTPS。
 - **直连 `github.com` 的 HTTPS 不通**：`curl https://github.com/...` 返回 `000`，`git ls-remote` 报 `HTTP/2 stream 1 was not closed cleanly`（HTTP/1.1 下直接超时）。其它外网（`example.com`、`api.github.com`）正常，所以别误判成“没网”。SSH 不受此影响。
