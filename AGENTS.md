@@ -5,16 +5,30 @@
 ## 目录组织
 
 - `docs/notes/`：个人/学习笔记放这里，不要堆在工作区根目录。
-- `tmp/`（即 CWD/tmp）：临时调试产物与旧草稿——下载的包、解压目录、测试环境、调试脚本，以及用户旧草稿（如 `遗传密码表.*`）。**调试产物明确无用后清理**，不要长期留在根目录。
+- `plugins/<name>/`：自研 dsh 插件（bundle）源码，一个插件一个子目录，见下方「插件」。
+- `tmp/`（即 CWD/tmp）：临时调试产物与旧草稿——下载的包、解压目录、测试环境、调试脚本，以及用户旧草稿（如 `遗传密码表.*`）。**调试产物明确无用后清理**，不要长期留在根目录；**插件源码不要放这里**。
 - `AGENTS.md`：本 rules 文件，随工作区自动被 `dsh-agent-instructions` 加载。
-- 根目录保持干净：只放 meta 文件（`AGENTS.md`、`docs/`、`.gitignore` 等）；用户草稿与调试产物一律进 `tmp/`。
+- 根目录保持干净：只放 meta 文件与长期内容（`AGENTS.md`、`docs/`、`plugins/`、`.gitignore` 等）；用户草稿与调试产物一律进 `tmp/`。
 
 ## 规则
 
 - 写文件前先 `read` 现有内容，避免覆盖用户已有文件。
 - 笔记类文档统一放 `docs/notes/`。
 - 临时调试产物统一放 `tmp/`（CWD/tmp），明确无用后清理。
+- 插件源码统一放 `plugins/<name>/`，安装/卸载只走 `plugin_manager`（`install_bundle` / `remove_bundle`），不要手写 `~/.dsh/profiles/<profile>/package.json` 或 `cordis.patch.yml`。
 - 修改/删除文件前，若路径在工作区外（如 `~/.dsh`），会触发沙箱拒绝（EROFS），需升级权限并说明理由。
+
+## 插件（plugins/）
+
+每个插件是一个标准 bundle 目录：`package.json`（`dsh.bundle.patch` + 可选的 `dsh.client`）、`cordis.patch.yml`、`index.js`（Host 半）、`client.js`（浏览器半，可省略）、`locale/*.json`（插件管理页的标题/描述）、`icon.svg`，外加一份 `README.md` 说明用途。
+
+安装与生效：
+
+- 安装：`plugin_manager` 的 `install_bundle`，`target` 用插件目录的**绝对路径**；profile 里记成 `link:<该目录>`，所以目录被移动、改名或删除都会让插件失效。
+- 移动/改名插件目录：先 `remove_bundle`，再从新路径 `install_bundle`。
+- 改 `client.js`：HMR 会换掉页面里的模块；改 `index.js`（Host 半）或移动了安装路径：**重启 `dsh web`** 才干净。`dsh-client-modules` 按 Loader specifier 缓存包的 `client.js` 路径直到进程重启，所以同一包名换了源目录后，仅刷新页面不足以让浏览器半重新挂上。
+- 卸载：`remove_bundle`（同时清掉 profile 里的 link 依赖）。
+- 当前插件：`plugins/sidebar-file-download` —— 右侧栏文件预览标题栏的下载按钮。
 
 ## Linting
 

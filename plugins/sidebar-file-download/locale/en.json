@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sidebar File Download",
+    "description": "Downloads the file open in the right Sidebar preview, from its document header or its unsupported-preview notice."
+  }
+}

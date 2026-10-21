@@ -1,0 +1,6 @@
+# One row: the Host half is empty, and the Client module adds the download
+# controls to the right Sidebar's document preview.
+- insert:
+    - id: sidebar-file-download
+      name: '@local/dsh-sidebar-file-download'
+      config: {}
