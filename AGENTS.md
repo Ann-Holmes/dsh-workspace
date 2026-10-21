@@ -69,3 +69,27 @@ Types: ✨ feat, 🐞 fix, 🦄 refactor, 🌈 style, 🐎 ci, 📃 docs, 🐳 c
   - 用 `node apps/cli/lib/bin.js web ...`（构建版 CLI）——推荐，无 tsx 路径分裂。
   - 用 `pnpm dsh`（tsx 源码）——`@deepseek-ai/*` 内部包会因 tsconfig paths 解析到 src、外部插件（`~/.dsh/profiles`）解析到 lib，造成 typert-protocol 双实例、插件 RPC 404。
 - 沙箱：`workspace-write` + 审批 `ask`；写工作区外需按需升 `danger-full-access`。
+
+### 网络与代理（推 GitHub 时）
+
+- **直连 `github.com` 不通**：`curl https://github.com/...` 返回 `000`，`git push` 挂住超时，`git ls-remote` 报 `HTTP/2 stream 1 was not closed cleanly`（HTTP/1.1 下直接超时）。其它外网（`example.com`、`api.github.com`）正常，所以别误判成“没配远程”或“没网”。
+- **本地 Clash 代理是通的**：`proxy_on` / `proxy_off` 来自 `/etc/profile.d/clash.sh`（`~/.zshrc` 里 source），本质是设置 `http_proxy` / `https_proxy` = `http://127.0.0.1:7890`。agent 的 bash 是 `bash -c`，拿不到 zsh 函数，直接内联同样几个变量：
+
+  ```shell
+  export http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 \
+         HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 \
+         no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost
+  curl -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}\n' https://github.com/Ann-Holmes/dsh-workspace
+  ```
+
+  返回 `200` 说明代理与 github 都可用（直连时是 `000`）。
+- **HTTPS 推送不要指望现成凭据**：`gh` 里 `github.com` 的 token 已失效，`credential.helper=cache` 没有缓存，也没有 `~/.git-credentials`；不要去找/打印 token。`git push` 会停在 `could not read Username for 'https://github.com'`。
+- **推送走 SSH**（`~/.ssh/id_rsa` 已验证可登录 `Ann-Holmes`，SSH 直连即可，不需要代理）：
+
+  ```shell
+  git push ssh://git@github.com/Ann-Holmes/dsh-workspace.git main
+  # 之后带代理 fetch，刷新 origin/main，避免本地一直显示“领先”
+  git fetch origin
+  ```
+
+  长期方案是把 remote 换成 SSH：`git remote set-url origin git@github.com:Ann-Holmes/dsh-workspace.git`。
