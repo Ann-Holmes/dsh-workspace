@@ -72,8 +72,10 @@ Types: ✨ feat, 🐞 fix, 🦄 refactor, 🌈 style, 🐎 ci, 📃 docs, 🐳 c
 
 ### 网络与代理（推 GitHub 时）
 
-- **直连 `github.com` 不通**：`curl https://github.com/...` 返回 `000`，`git push` 挂住超时，`git ls-remote` 报 `HTTP/2 stream 1 was not closed cleanly`（HTTP/1.1 下直接超时）。其它外网（`example.com`、`api.github.com`）正常，所以别误判成“没配远程”或“没网”。
-- **本地 Clash 代理是通的**：`proxy_on` / `proxy_off` 来自 `/etc/profile.d/clash.sh`（`~/.zshrc` 里 source），本质是设置 `http_proxy` / `https_proxy` = `http://127.0.0.1:7890`。agent 的 bash 是 `bash -c`，拿不到 zsh 函数，直接内联同样几个变量：
+- **远程仓库已改为 SSH**：`origin` = `git@github.com:Ann-Holmes/dsh-workspace.git`，`main` 跟踪 `origin/main`。日常 `git push` / `git fetch` 走 SSH 直连（`~/.ssh/id_rsa`，已验证可登录 `Ann-Holmes`），**既不需要代理也不需要 token**；不要再把 remote 改回 HTTPS。
+- **直连 `github.com` 的 HTTPS 不通**：`curl https://github.com/...` 返回 `000`，`git ls-remote` 报 `HTTP/2 stream 1 was not closed cleanly`（HTTP/1.1 下直接超时）。其它外网（`example.com`、`api.github.com`）正常，所以别误判成“没网”。SSH 不受此影响。
+- **HTTPS 推送不要指望现成凭据**：`gh` 里 `github.com` 的 token 已失效，`credential.helper=cache` 没有缓存，也没有 `~/.git-credentials`；不要去找/打印 token，也不要把 remote 切回 HTTPS 来“试试”。`git push` 会停在 `could not read Username for 'https://github.com'`。
+- **确实需要 HTTPS 访问时走本地 Clash 代理**：`proxy_on` / `proxy_off` 来自 `/etc/profile.d/clash.sh`（`~/.zshrc` 里 source），本质是设置 `http_proxy` / `https_proxy` = `http://127.0.0.1:7890`。agent 的 bash 是 `bash -c`，拿不到 zsh 函数，直接内联同样几个变量：
 
   ```shell
   export http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 \
@@ -82,14 +84,13 @@ Types: ✨ feat, 🐞 fix, 🦄 refactor, 🌈 style, 🐎 ci, 📃 docs, 🐳 c
   curl -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}\n' https://github.com/Ann-Holmes/dsh-workspace
   ```
 
-  返回 `200` 说明代理与 github 都可用（直连时是 `000`）。
-- **HTTPS 推送不要指望现成凭据**：`gh` 里 `github.com` 的 token 已失效，`credential.helper=cache` 没有缓存，也没有 `~/.git-credentials`；不要去找/打印 token。`git push` 会停在 `could not read Username for 'https://github.com'`。
-- **推送走 SSH**（`~/.ssh/id_rsa` 已验证可登录 `Ann-Holmes`，SSH 直连即可，不需要代理）：
+  返回 `200` 说明代理与 github HTTPS 都可用（直连时是 `000`）。适配场景：临时改成 HTTPS remote、访问 GitHub API、下载 release 包等。
+
+- **推送流程**（SSH，默认无需任何环境变量）：
 
   ```shell
-  git push ssh://git@github.com/Ann-Holmes/dsh-workspace.git main
-  # 之后带代理 fetch，刷新 origin/main，避免本地一直显示“领先”
-  git fetch origin
+  git push            # origin 已是 SSH
+  git status -sb      # 期望 `## main...origin/main`，没有 ahead/behind
   ```
 
-  长期方案是把 remote 换成 SSH：`git remote set-url origin git@github.com:Ann-Holmes/dsh-workspace.git`。
+  如果某次误走 HTTPS 推送导致 `origin/main` 没更新，用 `git fetch origin`（SSH）刷新跟踪分支即可，不必动代理。
